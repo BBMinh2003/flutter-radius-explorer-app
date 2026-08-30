@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class PoiCategory {
   final String id;
   final String label;
-  final String description; // Bổ sung mô tả chi tiết các địa điểm con
+  final String description;
   final IconData icon;
   final Color color;
   final String queryFilter;
