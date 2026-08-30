@@ -1,13 +1,13 @@
 import 'package:dio/dio.dart';
 import 'package:latlong2/latlong.dart';
-import '../../models/poi_category.dart';
-import '../../models/poi_model.dart';
+import 'package:flutter_map_app/data/models/poi_model.dart';
+import '../../../data/models/poi_category.dart';
 
 class OverpassService {
   final Dio _dio = Dio(
     BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
+      connectTimeout: const Duration(seconds: 12),
+      receiveTimeout: const Duration(seconds: 25), // Tăng timeout đồng bộ
       headers: {
         'User-Agent': 'FlutterMapApp/1.0 (com.example.flutter_map_app)',
       },
@@ -15,7 +15,8 @@ class OverpassService {
   );
 
   final List<String> _endpoints = [
-    'https://overpass-api.de/api/interpreter',
+    'https://overpass.nchc.org.tw/api/interpreter', 
+    'https://overpass-api.de/api/interpreter',     
     'https://overpass.kumi.systems/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
   ];
@@ -24,6 +25,7 @@ class OverpassService {
     required LatLng center,
     required double radiusInMeters,
     required Set<String> selectedCategoryIds,
+    CancelToken? cancelToken,
   }) async {
     if (selectedCategoryIds.isEmpty) return [];
 
@@ -45,21 +47,34 @@ class OverpassService {
       );
     }
 
-    final query = '[out:json][timeout:15];(${queryParts.join()});out center;';
+    final query = '[out:json][timeout:25];(${queryParts.join()});out center qt;';
 
     for (final endpoint in _endpoints) {
+      if (cancelToken?.isCancelled ?? false) break; 
+
       try {
         final response = await _dio.post(
           endpoint,
-          data: 'data=${Uri.encodeQueryComponent(query)}',
-          options: Options(contentType: Headers.formUrlEncodedContentType),
+          data: 'data=${Uri.encodeComponent(query)}',
+          cancelToken: cancelToken, 
+          options: Options(
+            contentType: Headers.formUrlEncodedContentType,
+            responseType: ResponseType.json,
+          ),
         );
 
-        if (response.statusCode == 200) {
+        if (response.statusCode == 200 && response.data != null) {
           final List elements = response.data['elements'] ?? [];
           return elements.map((e) => PoiModel.fromJson(e)).toList();
         }
+      } on DioException catch (e) {
+        if (CancelToken.isCancel(e)) {
+          rethrow; 
+        }
+        await Future.delayed(const Duration(milliseconds: 300));
+        continue;
       } catch (e) {
+        await Future.delayed(const Duration(milliseconds: 300));
         continue;
       }
     }

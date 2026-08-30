@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_app/core/services/location_services.dart';
@@ -35,6 +37,8 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
   bool _isScanning = false;
   double _radiusInMeters = 1000.0;
 
+  CancelToken? _scanCancelToken;
+
   final Set<String> _selectedCategoryIds = PoiCategory.categories
       .map((c) => c.id)
       .toSet();
@@ -63,7 +67,14 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
   }
 
   Future<void> _moveToUserLocation() async {
-    setState(() => _isLoading = true);
+    if (_isScanning) return;
+
+    setState(() {
+      _isLoading = true;
+      _searchController.clear();
+      _suggestions = [];
+    });
+
     final location = await LocationService.getCurrentLocation();
 
     if (location != null && mounted) {
@@ -80,32 +91,64 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
   }
 
   Future<void> _scanNearbyPois() async {
+    if (_isScanning) {
+      _cancelScan();
+      return;
+    }
+
+    _scanCancelToken = CancelToken();
+
     setState(() {
       _isScanning = true;
-      _routePoints.clear(); 
+      _routePoints.clear();
     });
 
     final allCategoryIds = PoiCategory.categories.map((c) => c.id).toSet();
 
-    final pois = await _overpassService.fetchNearbyPois(
-      center: _currentLocation,
-      radiusInMeters: _radiusInMeters,
-      selectedCategoryIds: allCategoryIds,
-    );
-
-    if (mounted) {
-      setState(() {
-        _allPoiList = pois;
-        _isScanning = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Tìm thấy ${_allPoiList.length} tiện ích xung quanh (Đang hiển thị ${_visiblePoiList.length})',
-          ),
-        ),
+    try {
+      final pois = await _overpassService.fetchNearbyPois(
+        center: _currentLocation,
+        radiusInMeters: _radiusInMeters,
+        selectedCategoryIds: allCategoryIds,
+        cancelToken: _scanCancelToken,
       );
+
+      if (mounted) {
+        setState(() {
+          _allPoiList = pois;
+          _isScanning = false;
+        });
+
+        final message = pois.isNotEmpty
+            ? 'Tìm thấy ${_allPoiList.length} tiện ích xung quanh (Đang hiển thị ${_visiblePoiList.length})'
+            : 'Không thể tải dữ liệu hoặc máy chủ quá tải. Vui lòng thử lại!';
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: pois.isNotEmpty ? null : Colors.orange[800],
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) {
+        if (mounted) {
+          setState(() => _isScanning = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Đã dừng quét tiện ích.')),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
     }
+  }
+
+  void _cancelScan() {
+    _scanCancelToken?.cancel('User cancelled');
   }
 
   Future<void> _drawRouteToPoi(PoiModel poi) async {
@@ -136,6 +179,8 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
   }
 
   void _onSearchChanged(String query) {
+    if (_isScanning) return;
+
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
       if (query.trim().length >= 2) {
@@ -148,6 +193,8 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
   }
 
   void _selectSuggestion(LocationSuggestion suggestion) {
+    if (_isScanning) return;
+
     FocusScope.of(context).unfocus();
     final newLocation = LatLng(suggestion.lat, suggestion.lon);
     setState(() {
@@ -162,6 +209,7 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
 
   @override
   void dispose() {
+    _scanCancelToken?.cancel();
     _mapController.dispose();
     _searchController.dispose();
     _debounceTimer?.cancel();
@@ -170,6 +218,14 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final screenWidth = mediaQuery.size.width;
+    final screenHeight = mediaQuery.size.height;
+    final topPadding = mediaQuery.padding.top;
+
+    final horizontalMargin = screenWidth * 0.035;
+    final bottomPanelOffset = screenHeight * 0.025;
+
     return Scaffold(
       resizeToAvoidBottomInset: false,
       body: Stack(
@@ -183,6 +239,8 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
                 FocusScope.of(context).unfocus();
               },
               onLongPress: (tapPosition, point) {
+                if (_isScanning) return;
+
                 setState(() {
                   _currentLocation = point;
                   _allPoiList.clear();
@@ -251,44 +309,54 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
             ],
           ),
 
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              MapSearchBar(
-                controller: _searchController,
-                suggestions: _suggestions,
-                onChanged: _onSearchChanged,
-                onClear: () {
-                  _searchController.clear();
-                  setState(() => _suggestions = []);
-                },
-                onSelectSuggestion: _selectSuggestion,
-              ),
-              PoiFilterBar(
-                selectedCategoryIds: _selectedCategoryIds,
-                onCategoryToggled: _toggleCategory,
-                onOpenSymbol: () {
-                  PoiSymbolDialog.show(
-                    context: context,
-                    poiList: _allPoiList,
-                    selectedCategoryIds: _selectedCategoryIds,
-                    onCategoryToggled: _toggleCategory,
-                    currentLocation: _currentLocation,
-                    onPoiSelected: _drawRouteToPoi,
-                  );
-                },
-              ),
-            ],
+          Positioned(
+            top:
+                topPadding +
+                (screenHeight * 0.01),
+            left: horizontalMargin,
+            right: horizontalMargin,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MapSearchBar(
+                  controller: _searchController,
+                  suggestions: _isScanning ? [] : _suggestions,
+                  onChanged: _isScanning ? (_) {} : _onSearchChanged,
+                  onClear: _isScanning
+                      ? () {}
+                      : () {
+                          _searchController.clear();
+                          setState(() => _suggestions = []);
+                        },
+                  onSelectSuggestion: _isScanning ? (_) {} : _selectSuggestion,
+                ),
+                PoiFilterBar(
+                  selectedCategoryIds: _selectedCategoryIds,
+                  onCategoryToggled: _toggleCategory,
+                  onOpenSymbol: () {
+                    PoiSymbolDialog.show(
+                      context: context,
+                      poiList: _allPoiList,
+                      selectedCategoryIds: _selectedCategoryIds,
+                      onCategoryToggled: _toggleCategory,
+                      currentLocation: _currentLocation,
+                      onPoiSelected: _drawRouteToPoi,
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
 
           Positioned(
-            left: 12,
-            right: 12,
-            bottom: 24,
+            left: horizontalMargin,
+            right: horizontalMargin,
+            bottom: bottomPanelOffset,
             child: RadiusControlPanel(
               radiusInMeters: _radiusInMeters,
               isScanning: _isScanning,
               onRadiusChanged: (value) {
+                if (_isScanning) return;
                 setState(() {
                   _radiusInMeters = value;
                   _allPoiList.clear();
@@ -299,20 +367,26 @@ class _MapExplorerScreenState extends State<MapExplorerScreen> {
             ),
           ),
 
+          Positioned(
+            right: horizontalMargin + 4,
+            bottom:
+                bottomPanelOffset +
+                (screenHeight *
+                    0.165), 
+            child: FloatingActionButton.small(
+              heroTag: 'btnMyLocation',
+              onPressed: _isScanning ? null : _moveToUserLocation,
+              backgroundColor: _isScanning ? Colors.grey : Colors.blueAccent,
+              child: const Icon(Icons.my_location, color: Colors.white),
+            ),
+          ),
+          
           if (_isLoading)
             Container(
               color: Colors.black12,
               child: const Center(child: CircularProgressIndicator()),
             ),
         ],
-      ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 140.0),
-        child: FloatingActionButton(
-          onPressed: _moveToUserLocation,
-          backgroundColor: Colors.blueAccent,
-          child: const Icon(Icons.my_location, color: Colors.white),
-        ),
       ),
     );
   }

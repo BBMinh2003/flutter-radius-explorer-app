@@ -34,9 +34,9 @@ class RadiusControlPanel extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 ElevatedButton.icon(
-                  onPressed: isScanning ? null : onScanPressed,
+                  onPressed: onScanPressed, 
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent,
+                    backgroundColor: isScanning ? Colors.redAccent : Colors.blueAccent,
                     foregroundColor: Colors.white,
                   ),
                   icon: isScanning
@@ -49,7 +49,7 @@ class RadiusControlPanel extends StatelessWidget {
                           ),
                         )
                       : const Icon(Icons.radar, size: 18),
-                  label: Text(isScanning ? 'Đang quét...' : 'Quét tiện ích'),
+                  label: Text(isScanning ? 'Dừng quét' : 'Quét tiện ích'),
                 ),
               ],
             ),
@@ -59,7 +59,7 @@ class RadiusControlPanel extends StatelessWidget {
               max: 5000,
               divisions: 9,
               activeColor: Colors.blueAccent,
-              onChanged: onRadiusChanged,
+              onChanged: isScanning ? null : onRadiusChanged,
             ),
           ],
         ),

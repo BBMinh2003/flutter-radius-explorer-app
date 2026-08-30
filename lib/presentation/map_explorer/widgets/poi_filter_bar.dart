@@ -21,7 +21,7 @@ class PoiFilterBar extends StatelessWidget {
       child: Row(
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 12.0, right: 4.0),
+            padding: const EdgeInsets.only(left: 4.0, right: 4.0),
             child: IconButton.filledTonal(
               onPressed: onOpenSymbol,
               icon: const Icon(Icons.info_outline, size: 20),
